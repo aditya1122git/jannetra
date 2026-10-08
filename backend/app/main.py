@@ -512,7 +512,6 @@ async def export(period: Literal['daily', 'weekly', 'monthly'] = 'daily', format
             rows=rows,
             sentiment_posts=sentiment_posts,
             sentiment_filter=sentiment,
-            source_rows=source_rows,
             demo=config().seed_mock_data,
         )
         content = stream.getvalue(); mime = 'application/pdf'

@@ -105,7 +105,6 @@ def build_sentiment_pdf(
     rows: list[dict],
     sentiment_posts: list[dict],
     sentiment_filter: str,
-    source_rows: list[dict],
     demo: bool = False,
 ) -> None:
     regular, bold = _fonts()
@@ -266,26 +265,7 @@ def build_sentiment_pdf(
         ('TOPPADDING', (0, 0), (-1, -1), 5),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
     ]))
-    story.extend([summary, Spacer(1, 5 * mm), Paragraph('Data source status', styles['JNSection'])])
-
-    source_data = [[Paragraph('Platform', styles['JNTableHead']), Paragraph('Source', styles['JNTableHead']), Paragraph('Status', styles['JNTableHead'])]]
-    for source in source_rows:
-        source_data.append([
-            Paragraph(_clean(str(source.get('platform', '')).title()), styles['JNTableLeft']),
-            Paragraph(_clean(source.get('source')), styles['JNTableLeft']),
-            Paragraph(_clean(source.get('status')), styles['JNTableLeft']),
-        ])
-    sources = Table(source_data, repeatRows=1, colWidths=[40*mm, 75*mm, 45*mm])
-    sources.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [WHITE, PALE]),
-        ('GRID', (0, 0), (-1, -1), .35, LINE),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-    ]))
-    story.append(sources)
-    story.append(PageBreak() if sentiment_posts else Spacer(1, 7 * mm))
+    story.extend([summary, PageBreak() if sentiment_posts else Spacer(1, 7 * mm)])
     story.extend([
         Paragraph(f'{filter_label} post evidence', styles['JNSection']),
         Paragraph(

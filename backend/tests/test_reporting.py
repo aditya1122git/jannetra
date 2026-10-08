@@ -41,7 +41,6 @@ def test_pdf_lists_filtered_posts_by_platform_with_clickable_links_and_poppins()
         }],
         sentiment_posts=posts,
         sentiment_filter='negative',
-        source_rows=[{'platform': 'facebook', 'source': 'Apify Actor', 'status': 'live'}],
     )
 
     stream.seek(0)
@@ -57,6 +56,7 @@ def test_pdf_lists_filtered_posts_by_platform_with_clickable_links_and_poppins()
     assert 'Youtube negative posts' in text
     assert 'A critical Facebook post' in text
     assert 'A critical YouTube title' in text
+    assert 'Data source status' not in text
     assert links == {post['url'] for post in posts}
     embedded_fonts = {
         str(font.get_object().get('/BaseFont'))

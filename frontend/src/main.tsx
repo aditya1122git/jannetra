@@ -119,6 +119,12 @@ const dateLabel = (d: string) =>
     day: "numeric",
     month: "short",
   });
+const sourceStateLabel = (source: Source) => {
+  if (source.status === "disconnected") return "Not connected";
+  if (/exhaust/i.test(source.error || "")) return "Quota exhausted";
+  if (source.status === "unavailable") return "Data unavailable";
+  return "Connected";
+};
 let bearer = "";
 async function api(path: string, options: RequestInit = {}) {
   const response = await fetch("/api" + path, {
@@ -400,10 +406,15 @@ function Workspace({
       {loadingTasks > 0 && <GlobalLoader message={loadingMessage} />}
       <header className={mobile ? "app-navbar open" : "app-navbar"}>
         <div className="navbar-inner">
-          <div className="navbar-brand">
+          <button
+            type="button"
+            className="navbar-brand"
+            aria-label="Go to overview"
+            onClick={() => navigate("overview")}
+          >
             <span className="navbar-logo"><Eye size={22} /></span>
             <strong>JanNetra</strong>
-          </div>
+          </button>
           <button
             className="mobile-toggle"
             aria-label="Toggle navigation"
@@ -898,18 +909,17 @@ function Workspace({
                                         className={
                                           s.status === "disconnected"
                                             ? "muted"
-                                            : "source-state"
+                                            : s.status === "unavailable"
+                                              ? "source-error"
+                                              : "source-state"
                                         }
                                       >
-                                        {s.status === "unavailable"
-                                          ? "Data unavailable"
-                                          : s.source}
+                                        {sourceStateLabel(s)}
                                       </span>
                                       <small>
                                         {s.status === "disconnected"
                                           ? "Excluded from totals"
-                                          : s.error ||
-                                            "Includes classified mentions"}
+                                          : s.error || "Includes classified mentions"}
                                       </small>
                                     </button>
                                   ))}
@@ -1330,8 +1340,8 @@ function ReportModal({ close }: { close: () => void }) {
   return (
     <Modal title="Export sentiment report" close={close}>
       <p>
-        Reports include classified totals, negativity index, and source
-        coverage. Reporting days use Asia/Kolkata.
+        Reports include classified totals, negativity index, and post evidence.
+        Reporting days use Asia/Kolkata.
       </p>
       <label>
         Period
@@ -1629,8 +1639,7 @@ function SettingsPanel({
     [editing, setEditing] = useState(false),
     [message, setMessage] = useState(""),
     [error, setError] = useState(""),
-    [saving, setSaving] = useState(false),
-    [credential, setCredential] = useState<any>(null);
+    [saving, setSaving] = useState(false);
   useEffect(() => {
     const finishLoading = beginLoading("Loading workspace settings…");
     json("/settings")
@@ -1751,100 +1760,6 @@ function SettingsPanel({
           ) : null}
         </div>
       </form>
-      <section className="panel settings-section connections">
-        <div className="panel-title">
-          <h2>API connections</h2>
-          <span>Secrets are encrypted and never returned</span>
-        </div>
-        {Object.entries(names).map(
-          ([key, name]) => {
-            const src = prefs.sources.find((s: Source) => s.platform === key);
-            const c = prefs.credentials.find((c: any) => c.platform === key);
-            return (
-              <div className="connection" key={key}>
-                <div>
-                  <strong>{name}</strong>
-                  <p>
-                    {key === "youtube"
-                      ? "Official Data API v3 - quota-aware schedule"
-                      : key === "news"
-                        ? "Google News RSS - automatic, no API key required"
-                        : "Apify Actor - configured source monitoring"}
-                  </p>
-                </div>
-                <span>
-                  {src?.source ||
-                    c?.status ||
-                    "Not connected"}
-                </span>
-                <button
-                  disabled={!admin || key === "news"}
-                  onClick={() =>
-                    setCredential({
-                      platform: key,
-                      mode: key === "youtube" ? "official" : "apify",
-                      api_key: "",
-                    })
-                  }
-                >
-                  {key === "news" ? "Automatic" : "Configure"}
-                </button>
-              </div>
-            );
-          },
-        )}
-      </section>
-      <section className="panel settings-section connections">
-        <div className="panel-title"><h2>Sentiment classifier</h2><span>Hugging Face + Gemini verifier</span></div>
-        <strong>{prefs.model}</strong>
-        <p>Status: {prefs.classifier?.status || "pending"}</p>
-        <p>YouTube uses video titles only. Hugging Face runs first; results below {Math.round((prefs.classifier?.threshold ?? 0.80) * 100)}% and titles with ambiguous sentiment targets are verified by Gemini.</p>
-        <p>Gemini verifier: {prefs.classifier?.fallback_configured ? `configured (${prefs.classifier?.fallback_model || "server model"})` : "key missing - low-confidence items remain pending"}. Gemini resolves whether negative language is actually directed at Jan Suraaj or Prashant Kishore, including sarcasm.</p>
-        {prefs.classifier?.error && <p className="error">{prefs.classifier.error}</p>}
-      </section>
-      {credential && (
-        <Modal
-          title={"Configure " + (names[credential.platform] || "Platform")}
-          close={() => setCredential(null)}
-        >
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const finishLoading = beginLoading("Saving API connection…");
-              setError("");
-              try {
-                await json("/credentials", {
-                  method: "PUT",
-                  body: JSON.stringify(credential),
-                });
-                setCredential(null);
-                onSaved();
-                setMessage("Connection saved. Run Refresh to verify access.");
-              } catch (e) {
-                setError((e as Error).message);
-              } finally {
-                finishLoading();
-              }
-            }}
-          >
-            <label>
-              {credential.platform === "youtube" ? "YouTube API key" : "Apify API token"}
-              <input className="form-control"
-                type="password"
-                autoComplete="new-password"
-                required
-                minLength={10}
-                value={credential.api_key}
-                onChange={(e) =>
-                  setCredential({ ...credential, api_key: e.target.value })
-                }
-              />
-            </label>
-            {error && <p className="error">{error}</p>}
-            <button className="btn btn-primary primary">Save encrypted credential</button>
-          </form>
-        </Modal>
-      )}
     </>
   );
 }

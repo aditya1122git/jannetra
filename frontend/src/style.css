@@ -776,6 +776,9 @@ main {
 .source-state {
   color: #348973;
 }
+.source-error {
+  color: #c44743;
+}
 .muted {
   color: #8794a1;
   font-weight: 400;
@@ -1917,10 +1920,28 @@ body {
 .navbar-brand {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
+  justify-self: start;
   gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--fb-blue);
   font-size: 22px;
   letter-spacing: -0.7px;
+  cursor: pointer;
+  text-align: left;
+}
+.navbar-brand:hover,
+.navbar-brand:focus-visible,
+.navbar-brand:active {
+  background: transparent;
+  color: var(--fb-blue);
+}
+.navbar-brand:focus-visible {
+  outline: 2px solid var(--fb-blue);
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 .navbar-brand strong {
   font-weight: 700;
