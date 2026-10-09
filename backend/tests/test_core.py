@@ -8,11 +8,12 @@ import pytest
 import httpx
 from cryptography.fernet import Fernet
 from mongomock_motor import AsyncMongoMockClient
-from app.config import Config, DEFAULT_APIFY_ACTORS, APIFY_X_FALLBACK_ACTOR
+from app.config import (Config, DEFAULT_APIFY_ACTORS, APIFY_X_FALLBACK_ACTOR,
+                        APIFY_REDDIT_FALLBACK_ACTOR)
 from app.models import now
 from app.services import bounds, today, create_alert, statuses, encrypt, decrypt, notify_negative_posts, within_automation_window
 from app.sentiment import Classifier
-from app.connectors import NEWS_CHANNELS, NEWS_SEARCH_QUERIES, matches, apify_posts, google_news_posts, _actor_input, _approved_news_source, ProviderError, request
+from app.connectors import NEWS_CHANNELS, NEWS_SEARCH_QUERIES, matches, apify_posts, google_news_posts, _actor_input, _reddit_lite_input, _approved_news_source, ProviderError, request
 
 
 def test_timezone_boundary():
@@ -26,6 +27,25 @@ def test_bootstrap_credentials_are_optional_for_existing_database():
                       jwt_secret='x' * 32, encryption_key=Fernet.generate_key().decode(),
                       bootstrap_email='', bootstrap_password='')
     assert settings.bootstrap_email == '' and settings.bootstrap_password == ''
+
+
+def test_legacy_social_platform_list_automatically_enables_reddit():
+    settings = Config(
+        _env_file=None, seed_mock_data=False, demo_in_memory=False,
+        jwt_secret='x' * 32, encryption_key=Fernet.generate_key().decode(),
+        apify_api_token='apify-token',
+        enabled_platforms='facebook,instagram,x,youtube,news',
+    )
+    assert settings.enabled_platforms == 'facebook,instagram,x,youtube,news,reddit'
+
+
+def test_youtube_only_platform_list_remains_explicit():
+    settings = Config(
+        _env_file=None, seed_mock_data=False, demo_in_memory=False,
+        jwt_secret='x' * 32, encryption_key=Fernet.generate_key().decode(),
+        apify_api_token='apify-token', enabled_platforms='youtube',
+    )
+    assert settings.enabled_platforms == 'youtube'
 
 
 def test_encryption():
@@ -68,6 +88,13 @@ def test_token_only_apify_inputs_are_platform_specific():
     assert reddit['maxPosts'] == 20
     assert reddit['dateFrom'] == since.astimezone(timezone.utc).date().isoformat()
     assert DEFAULT_APIFY_ACTORS['reddit'] == 'fatihtahta~reddit-scraper-search-fast'
+    assert APIFY_REDDIT_FALLBACK_ACTOR == 'trudax~reddit-scraper-lite'
+    reddit_lite = _reddit_lite_input(keywords + ['PK'], since, 50)
+    assert reddit_lite['searches'] == ['"Jan Suraaj" OR "Prashant Kishore"']
+    assert reddit_lite['searchPosts'] is True
+    assert reddit_lite['searchComments'] is False
+    assert reddit_lite['skipComments'] is True
+    assert reddit_lite['maxItems'] == 20
 
 
 @pytest.mark.asyncio
@@ -202,6 +229,40 @@ async def test_reddit_apify_maps_post_body_and_skips_comments():
     assert rows[0]['content_scope'] == 'reddit-post-only-v1'
     payload = json.loads(captured[0].content)
     assert payload['scrapeComments'] is False
+
+
+@pytest.mark.asyncio
+async def test_reddit_apify_uses_lite_fallback_and_maps_its_schema():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if 'fatihtahta~reddit-scraper-search-fast/' in request.url.path:
+            return httpx.Response(400, json={'error': {'message': 'temporary rejection'}})
+        return httpx.Response(200, json=[{
+            'dataType': 'post', 'id': 'lite-post-1',
+            'title': 'Jan Suraaj discussion', 'body': 'Prashant Kishore update',
+            'username': 'bihar_reader', 'upVotes': 12, 'numberOfComments': 3,
+            'createdAt': now().isoformat(),
+            'url': 'https://www.reddit.com/r/bihar/comments/lite-post-1/topic/',
+        }])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await apify_posts(
+            client, 'reddit', {'api_key': 'token'},
+            ['Jan Suraaj', 'Prashant Kishore'], now() - timedelta(hours=4),
+        )
+
+    assert len(rows) == 1
+    assert rows[0]['author'] == 'bihar_reader'
+    assert rows[0]['engagement']['likes'] == 12
+    assert rows[0]['engagement']['comments'] == 3
+    assert 'fatihtahta~reddit-scraper-search-fast/' in requests[0].url.path
+    assert 'trudax~reddit-scraper-lite/' in requests[1].url.path
+    assert requests[1].url.params['maxTotalChargeUsd'] == '0.1'
+    fallback_payload = json.loads(requests[1].content)
+    assert fallback_payload['skipComments'] is True
+    assert fallback_payload['searchComments'] is False
 
 
 @pytest.mark.asyncio

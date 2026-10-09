@@ -16,6 +16,8 @@ DEFAULT_APIFY_ACTORS = {
 }
 APIFY_X_FALLBACK_ACTOR = 'apidojo~twitter-scraper-lite'
 APIFY_X_FALLBACK_MAX_CHARGE_USD = 0.10
+APIFY_REDDIT_FALLBACK_ACTOR = 'trudax~reddit-scraper-lite'
+APIFY_REDDIT_FALLBACK_MAX_CHARGE_USD = 0.10
 APIFY_FACEBOOK_DISCOVERY_ACTOR = 'apify~facebook-search-scraper'
 APIFY_FACEBOOK_DISCOVERY_LIMIT = 12
 APIFY_MAX_ITEMS = 50
@@ -91,8 +93,20 @@ class Config(BaseSettings):
             raise ValueError('Invalid classifier threshold/concurrency')
         if not 1 <= self.youtube_initial_lookback_days <= 30:
             raise ValueError('Invalid YouTube search coverage settings')
-        if set(self.enabled_platforms.split(',')) - {'facebook', 'instagram', 'x', 'youtube', 'news', 'reddit'}:
+        self.apify_api_token = self.apify_api_token.strip()
+        enabled = list(dict.fromkeys(
+            value.strip() for value in self.enabled_platforms.split(',') if value.strip()
+        ))
+        if set(enabled) - {'facebook', 'instagram', 'x', 'youtube', 'news', 'reddit'}:
             raise ValueError('Invalid ENABLED_PLATFORMS')
+        # Deployments created before Reddit support often retain an explicit
+        # five-platform value in the VPS environment. Compose defaults cannot
+        # replace an existing value, so migrate that legacy social setup while
+        # preserving intentional YouTube-only installations.
+        if (self.apify_api_token and 'reddit' not in enabled
+                and set(enabled) & {'facebook', 'instagram', 'x'}):
+            enabled.append('reddit')
+        self.enabled_platforms = ','.join(enabled)
         if self.youtube_sync_interval_minutes != 15:
             raise ValueError('YouTube sync interval must remain 15 minutes')
         if self.hf_device not in ('cpu', 'cuda', 'mps'):

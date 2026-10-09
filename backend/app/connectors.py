@@ -17,6 +17,8 @@ from .config import (
     APIFY_FACEBOOK_DISCOVERY_ACTOR,
     APIFY_FACEBOOK_DISCOVERY_LIMIT,
     APIFY_MAX_ITEMS,
+    APIFY_REDDIT_FALLBACK_ACTOR,
+    APIFY_REDDIT_FALLBACK_MAX_CHARGE_USD,
     APIFY_RUN_TIMEOUT_SECONDS,
     APIFY_X_FALLBACK_ACTOR,
     APIFY_X_FALLBACK_MAX_CHARGE_USD,
@@ -400,11 +402,43 @@ def _actor_input(platform, keywords, since, max_items):
     raise ProviderError(f'Unsupported direct Apify input for {platform}')
 
 
+def _reddit_lite_input(keywords, since, max_items):
+    """Build the separate input contract used by trudax/reddit-scraper-lite."""
+    terms = []
+    for keyword in keywords:
+        cleaned = str(keyword).strip()
+        if not cleaned or cleaned.casefold() == 'pk':
+            continue
+        expression = cleaned if cleaned.startswith('#') else f'"{cleaned.replace(chr(34), "").strip()}"'
+        if expression.casefold() not in {term.casefold() for term in terms}:
+            terms.append(expression)
+    if not terms:
+        raise ProviderError('No usable Reddit search terms')
+    fallback_limit = min(max_items, 20)
+    return {
+        'searches': [' OR '.join(terms)],
+        'ignoreStartUrls': True,
+        'skipComments': True,
+        'searchPosts': True,
+        'searchComments': False,
+        'searchCommunities': False,
+        'searchUsers': False,
+        'searchMedia': False,
+        'sort': 'new',
+        'time': 'day',
+        'includeNSFW': False,
+        'maxItems': fallback_limit,
+        'maxPostCount': fallback_limit,
+        'maxComments': 0,
+        'postDateLimit': since.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'),
+    }
+
+
 def _apify_item(platform, item, keywords, since):
     if not isinstance(item, dict):
         return None
     if platform == 'reddit':
-        kind = str(_first(item, 'kind', 'type', default='post')).lower()
+        kind = str(_first(item, 'kind', 'dataType', 'type', default='post')).lower()
         if kind not in ('post', 'submission'):
             return None
     title = str(_first(item, 'title', 'headline', 'article.title', default='')).strip()
@@ -422,15 +456,15 @@ def _apify_item(platform, item, keywords, since):
     url = str(_first(item, 'canonical_url', 'url', 'postUrl', 'tweetUrl', 'permalink', 'link', 'article.url', default=''))
     if platform == 'reddit' and url.startswith('/'):
         url = 'https://www.reddit.com' + url
-    external_id = _first(item, 'id', 'postId', 'tweetId', 'shortCode', 'shortcode', 'article.id')
+    external_id = _first(item, 'id', 'parsedId', 'postId', 'tweetId', 'shortCode', 'shortcode', 'article.id')
     if not external_id:
         external_id = hashlib.sha256(f'{platform}\0{url}\0{content}\0{published.isoformat()}'.encode()).hexdigest()
     author = _author_name(_first(item, 'authorName', 'pageName', 'author.name', 'author.userName', 'author.username',
                                 'author', 'ownerUsername', 'username', 'fullName', 'user.pageName', 'user.name', 'user',
                                 'channelName', 'source', 'publisher', default='Unknown'))
     engagement = dict(
-        likes=_number(item, 'likesCount', 'likeCount', 'reactionCount', 'likes', 'favoriteCount', 'score', 'ups', 'stats.likes', 'reactions_count', 'public_metrics.like_count'),
-        comments=_number(item, 'commentsCount', 'commentCount', 'comments', 'replyCount', 'num_comments', 'stats.comments', 'comments_count', 'public_metrics.reply_count'),
+        likes=_number(item, 'likesCount', 'likeCount', 'reactionCount', 'likes', 'favoriteCount', 'score', 'ups', 'upVotes', 'stats.likes', 'reactions_count', 'public_metrics.like_count'),
+        comments=_number(item, 'commentsCount', 'commentCount', 'comments', 'replyCount', 'num_comments', 'numberOfComments', 'stats.comments', 'comments_count', 'public_metrics.reply_count'),
         shares=_number(item, 'sharesCount', 'shareCount', 'shares', 'retweetCount', 'stats.shares', 'reshare_count', 'public_metrics.retweet_count'),
         views=_number(item, 'viewsCount', 'viewCount', 'videoPostViewCount', 'views', 'impressionCount', 'public_metrics.impression_count'),
     )
@@ -514,6 +548,23 @@ async def apify_posts(client, platform, secret, keywords, since):
                 ) from None
             if data and all(isinstance(item, dict) and item.get('noResults') for item in data):
                 raise ProviderError('Apify X Actors returned no tweet rows')
+    elif platform == 'reddit':
+        try:
+            data = await _run_apify_actor(
+                client, DEFAULT_APIFY_ACTORS[platform], api_key, payload, max_items,
+            )
+        except ProviderError as primary_error:
+            try:
+                fallback_payload = _reddit_lite_input(keywords, since, max_items)
+                data = await _run_apify_actor(
+                    client, APIFY_REDDIT_FALLBACK_ACTOR, api_key, fallback_payload,
+                    fallback_payload['maxItems'],
+                    max_total_charge_usd=APIFY_REDDIT_FALLBACK_MAX_CHARGE_USD,
+                )
+            except ProviderError:
+                raise ProviderError(
+                    f'Reddit Actors unavailable; primary error: {primary_error}'
+                ) from None
     else:
         data = await _run_apify_actor(
             client, DEFAULT_APIFY_ACTORS[platform], api_key, payload, max_items,
