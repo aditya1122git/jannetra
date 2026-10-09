@@ -3,12 +3,12 @@ os.environ['SEED_MOCK_DATA'] = 'true'
 os.environ['DEMO_IN_MEMORY'] = 'true'
 os.environ['SCHEDULER_ENABLED'] = 'false'
 import json
-from datetime import timedelta
+from datetime import timedelta, timezone
 import pytest
 import httpx
 from cryptography.fernet import Fernet
 from mongomock_motor import AsyncMongoMockClient
-from app.config import Config, DEFAULT_APIFY_ACTORS
+from app.config import Config, DEFAULT_APIFY_ACTORS, APIFY_X_FALLBACK_ACTOR
 from app.models import now
 from app.services import bounds, today, create_alert, statuses, encrypt, decrypt, notify_negative_posts, within_automation_window
 from app.sentiment import Classifier
@@ -58,14 +58,15 @@ def test_token_only_apify_inputs_are_platform_specific():
     assert x_input['start'] == since.date().isoformat()
     assert x_input['maxItems'] == 50
     assert x_input['sort'] == 'Latest + Top'
-    assert DEFAULT_APIFY_ACTORS['x'] == 'apidojo~twitter-scraper-lite'
+    assert DEFAULT_APIFY_ACTORS['x'] == 'apidojo~tweet-scraper'
+    assert APIFY_X_FALLBACK_ACTOR == 'apidojo~twitter-scraper-lite'
 
     reddit = _actor_input('reddit', keywords + ['PK'], since, 20)
     assert reddit['queries'] == ['"Jan Suraaj" OR "Prashant Kishore"']
     assert reddit['sort'] == 'new'
     assert reddit['scrapeComments'] is False
     assert reddit['maxPosts'] == 20
-    assert reddit['dateFrom'].endswith('Z')
+    assert reddit['dateFrom'] == since.astimezone(timezone.utc).date().isoformat()
     assert DEFAULT_APIFY_ACTORS['reddit'] == 'fatihtahta~reddit-scraper-search-fast'
 
 
@@ -81,6 +82,32 @@ async def test_x_apify_no_results_sentinel_is_not_reported_as_live():
                 client, 'x', {'api_key': 'token'}, ['Jan Suraaj'],
                 now() - timedelta(hours=4),
             )
+
+
+@pytest.mark.asyncio
+async def test_x_apify_uses_bounded_lite_fallback_after_primary_failure():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if 'apidojo~tweet-scraper/' in request.url.path:
+            return httpx.Response(400, json={'error': {'message': 'temporary rejection'}})
+        return httpx.Response(200, json=[{
+            'id': 'fallback-tweet', 'text': 'Jan Suraaj update',
+            'createdAt': now().isoformat(), 'url': 'https://x.com/example/status/1',
+            'author': {'name': 'Reporter'},
+        }])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await apify_posts(
+            client, 'x', {'api_key': 'token'}, ['Jan Suraaj'],
+            now() - timedelta(hours=4),
+        )
+
+    assert len(rows) == 1
+    assert 'apidojo~tweet-scraper/' in requests[0].url.path
+    assert 'apidojo~twitter-scraper-lite/' in requests[1].url.path
+    assert requests[1].url.params['maxTotalChargeUsd'] == '0.1'
 
 
 @pytest.mark.parametrize('source', [

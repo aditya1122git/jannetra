@@ -100,7 +100,7 @@ This uses built-in sample text only. It does not write posts, connect to social 
 
 | Platform | Implemented connector | Required access / coverage |
 |---|---|---|
-| X | Configured Apify Actor, normalized output, overlap deduplication and retry/backoff | Apify token, Actor access and the Actor's input schema. |
+| X | `apidojo/tweet-scraper` primary with a charge-bounded `apidojo/twitter-scraper-lite` fallback, normalized output, overlap deduplication and retry/backoff | Apify token and Actor access. The primary avoids the Lite Actor's high per-query FREE-tier price. |
 | Reddit | `fatihtahta/reddit-scraper-search-fast`, post-only keyword search, newest-first date filtering | Apify token. Titles and post bodies are stored; comments and NSFW posts are excluded. |
 | YouTube | Official Data API v3 video search + `videos.list` snippet/statistics | Every 15 minutes inside the admin-configured active window, one combined search covers all tracked terms and includes regular videos and Shorts. `videos.list` supplies duration and engagement metadata. If the primary key reports quota exhaustion, the connector switches to `YOUTUBE_BACKUP_API_KEY` for the rest of that run. The initial strategy upgrade backfills 7 days. Only the video title is matched, stored, and classified. Descriptions and comments are excluded. |
 | Facebook | Configured Apify Actor | Actor access and a compatible output schema. |
@@ -113,7 +113,7 @@ YouTube Search API is relevance-ranked and does not promise an exhaustive list o
 
 ### Apify Actor contract
 
-`APIFY_API_TOKEN` is the only Apify environment value. JanNetra fixes the social Actors to `apify/facebook-posts-scraper`, `apify/instagram-scraper`, `apidojo/twitter-scraper-lite`, and `fatihtahta/reddit-scraper-search-fast`. Because Facebook's Posts Actor requires page URLs, JanNetra first discovers relevant public pages through `apify/facebook-search-scraper`, then fetches their latest posts. Reddit collection stores posts only and does not request comments. News is fetched separately from Google News RSS and requires no API token. Social connectors use bearer authentication, bounded synchronous runs, keyword filtering and retry/backoff.
+`APIFY_API_TOKEN` is the only Apify environment value. JanNetra fixes the social Actors to `apify/facebook-posts-scraper`, `apify/instagram-scraper`, `apidojo/tweet-scraper` (with a bounded `apidojo/twitter-scraper-lite` fallback), and `fatihtahta/reddit-scraper-search-fast`. Because Facebook's Posts Actor requires page URLs, JanNetra first discovers relevant public pages through `apify/facebook-search-scraper`, then fetches their latest posts. Reddit collection stores posts only and does not request comments. News is fetched separately from Google News RSS and requires no API token. Social connectors use bearer authentication, bounded synchronous runs, keyword filtering and retry/backoff. Restart the API container after rotating `APIFY_API_TOKEN`; startup replaces all encrypted social credentials with the new environment token and clears stale provider errors.
 
 Actor IDs and JSON templates remain optional advanced overrides because Store Actors and their schemas can change independently of JanNetra. Output normalization accepts common IDs, post text/caption/title, publication timestamps, URLs, authors and engagement counts. Items without a usable timestamp or tracked term are excluded.
 

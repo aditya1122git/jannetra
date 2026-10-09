@@ -18,6 +18,8 @@ from .config import (
     APIFY_FACEBOOK_DISCOVERY_LIMIT,
     APIFY_MAX_ITEMS,
     APIFY_RUN_TIMEOUT_SECONDS,
+    APIFY_X_FALLBACK_ACTOR,
+    APIFY_X_FALLBACK_MAX_CHARGE_USD,
     DEFAULT_APIFY_ACTORS,
     config,
 )
@@ -383,7 +385,9 @@ def _actor_input(platform, keywords, since, max_items):
             'queries': [' OR '.join(terms)],
             'sort': 'new',
             'timeframe': 'day',
-            'dateFrom': since.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            # This Actor rejects ISO timestamps here; its schema requires a
+            # calendar date in YYYY-MM-DD form.
+            'dateFrom': since.astimezone(timezone.utc).date().isoformat(),
             'forceSortNewForTimeFilteredRuns': True,
             'scrapeComments': False,
             'includeNsfw': False,
@@ -437,12 +441,15 @@ def _apify_item(platform, item, keywords, since):
     return row
 
 
-async def _run_apify_actor(client, actor_id, api_key, payload, limit):
+async def _run_apify_actor(client, actor_id, api_key, payload, limit, max_total_charge_usd=None):
     actor_path = quote(actor_id.replace('/', '~'), safe='~')
     url = f'https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items'
+    params = {'format': 'json', 'clean': '1', 'limit': limit, 'maxItems': limit,
+              'timeout': APIFY_RUN_TIMEOUT_SECONDS}
+    if max_total_charge_usd is not None:
+        params['maxTotalChargeUsd'] = max_total_charge_usd
     data = await request(client, 'POST', url,
-                         params={'format': 'json', 'clean': '1', 'limit': limit, 'maxItems': limit,
-                                 'timeout': APIFY_RUN_TIMEOUT_SECONDS},
+                         params=params,
                          headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
                          timeout=APIFY_RUN_TIMEOUT_SECONDS + 15,
                          json=payload)
@@ -480,13 +487,36 @@ async def apify_posts(client, platform, secret, keywords, since):
         }
     else:
         payload = _actor_input(platform, keywords, since, max_items)
-    data = await _run_apify_actor(
-        client, DEFAULT_APIFY_ACTORS[platform], api_key, payload, max_items,
-    )
-    if platform == 'x' and data and all(
-            isinstance(item, dict) and item.get('noResults') for item in data):
-        raise ProviderError(
-            'Apify X Actor returned no tweet rows; the search provider did not supply results'
+    if platform == 'x':
+        primary_error = None
+        try:
+            data = await _run_apify_actor(
+                client, DEFAULT_APIFY_ACTORS[platform], api_key, payload, max_items,
+            )
+            primary_no_results = bool(data) and all(
+                isinstance(item, dict) and item.get('noResults') for item in data
+            )
+            if primary_no_results:
+                raise ProviderError('Primary X Actor returned no tweet rows')
+        except ProviderError as exc:
+            primary_error = exc
+            try:
+                # Protect FREE-plan credits: on that tier this fallback can
+                # cost far more per query than Tweet Scraper V2. Paid plans
+                # can execute it inside the same bounded charge ceiling.
+                data = await _run_apify_actor(
+                    client, APIFY_X_FALLBACK_ACTOR, api_key, payload, max_items,
+                    max_total_charge_usd=APIFY_X_FALLBACK_MAX_CHARGE_USD,
+                )
+            except ProviderError:
+                raise ProviderError(
+                    f'X Actors unavailable; primary error: {primary_error}'
+                ) from None
+            if data and all(isinstance(item, dict) and item.get('noResults') for item in data):
+                raise ProviderError('Apify X Actors returned no tweet rows')
+    else:
+        data = await _run_apify_actor(
+            client, DEFAULT_APIFY_ACTORS[platform], api_key, payload, max_items,
         )
     rows = []
     invalid = 0

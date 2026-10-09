@@ -8,9 +8,14 @@ from pydantic import model_validator
 DEFAULT_APIFY_ACTORS = {
     'facebook': 'apify~facebook-posts-scraper',
     'instagram': 'apify~instagram-scraper',
-    'x': 'apidojo~twitter-scraper-lite',
+    # Tweet Scraper V2 is the economical primary on every Apify plan. The
+    # Unlimited/Lite Actor has a very high per-query price on the FREE tier,
+    # so it is kept as a bounded fallback instead of running every four hours.
+    'x': 'apidojo~tweet-scraper',
     'reddit': 'fatihtahta~reddit-scraper-search-fast',
 }
+APIFY_X_FALLBACK_ACTOR = 'apidojo~twitter-scraper-lite'
+APIFY_X_FALLBACK_MAX_CHARGE_USD = 0.10
 APIFY_FACEBOOK_DISCOVERY_ACTOR = 'apify~facebook-search-scraper'
 APIFY_FACEBOOK_DISCOVERY_LIMIT = 12
 APIFY_MAX_ITEMS = 50

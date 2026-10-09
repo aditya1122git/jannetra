@@ -159,7 +159,8 @@ async def lifespan(app):
         if c.apify_api_token and not c.seed_mock_data and p in c.enabled_platforms.split(','):
             secret = {'api_key': c.apify_api_token}
             await db.platform_credentials.update_one({'platform': p}, {'$set': dict(platform=p, mode='apify',
-                encrypted_api_key=encrypt(secret), status='pending', last_synced_at=None)}, upsert=True)
+                encrypted_api_key=encrypt(secret), status='pending', error=None,
+                last_synced_at=None)}, upsert=True)
         elif not c.seed_mock_data:
             await db.platform_credentials.delete_one({'platform': p, 'mode': {'$ne': 'apify'}})
     if not c.seed_mock_data and 'news' in c.enabled_platforms.split(','):
