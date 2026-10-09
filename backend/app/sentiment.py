@@ -207,8 +207,14 @@ class Classifier:
                 result.model_used = self.provenance
                 if result.hf_confidence is None:
                     result.hf_confidence = result.confidence
+            # Cardiff predicts overall text tone rather than stance toward the
+            # tracked political entity. Every negative candidate therefore
+            # needs Gemini target verification, even when HF is confident.
+            # Low-confidence non-negative candidates continue to use the same
+            # verifier. The Gemini result is always the final saved result.
             verify = [i for i, result in enumerate(results)
-                      if result.confidence < self.settings.hf_confidence_threshold]
+                      if (result.sentiment == 'negative'
+                          or result.confidence < self.settings.hf_confidence_threshold)]
             if verify:
                 from .gemini_fallback import GeminiFallback
                 if self._gemini is None:
@@ -227,7 +233,7 @@ class Classifier:
                         results[index] = fallback
             self.status = 'partial' if any(r.pending for r in results) else 'live'
             self.error = ((getattr(self._gemini, 'last_error', None) or
-                           'Gemini fallback unavailable; low-confidence posts remain pending.')
+                           'Gemini verifier unavailable; negative or low-confidence posts remain pending.')
                           if self.status == 'partial' else None)
             return results
         except Exception:

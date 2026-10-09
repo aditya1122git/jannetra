@@ -274,7 +274,7 @@ def build_sentiment_pdf(
         ),
     ])
 
-    platform_order = ['facebook', 'instagram', 'x', 'youtube', 'news']
+    platform_order = ['facebook', 'instagram', 'x', 'youtube', 'news', 'reddit']
     first_platform = True
     for platform in platform_order + sorted(set(by_platform) - set(platform_order)):
         posts = by_platform.get(platform, [])

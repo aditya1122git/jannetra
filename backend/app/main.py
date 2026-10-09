@@ -87,7 +87,7 @@ def automation_schedule():
             'next_run_at': next_time('all-sources-4h', 'youtube-news-quarter-hour', 'youtube-news-full-hour'),
         },
         'social': {
-            'label': 'Facebook + Instagram + X', 'interval_seconds': 4 * 60 * 60,
+            'label': 'Facebook + Instagram + X + Reddit', 'interval_seconds': 4 * 60 * 60,
             'next_run_at': next_time('all-sources-4h'),
         },
     }
@@ -155,7 +155,7 @@ async def lifespan(app):
                          })),
             '$setOnInsert': dict(status='pending', last_synced_at=None),
         }, upsert=True)
-    for p in ['facebook', 'instagram', 'x']:
+    for p in ['facebook', 'instagram', 'x', 'reddit']:
         if c.apify_api_token and not c.seed_mock_data and p in c.enabled_platforms.split(','):
             secret = {'api_key': c.apify_api_token}
             await db.platform_credentials.update_one({'platform': p}, {'$set': dict(platform=p, mode='apify',
@@ -374,7 +374,7 @@ async def update_settings(value: Preferences, user=Depends(admin)):
 
 
 class CredentialInput(BaseModel):
-    platform: Literal['facebook', 'instagram', 'x', 'youtube']
+    platform: Literal['facebook', 'instagram', 'x', 'youtube', 'reddit']
     mode: Literal['official', 'apify'] = 'official'
     api_key: str = Field(min_length=10, max_length=10000)
 
@@ -385,7 +385,7 @@ async def credentials(value: CredentialInput, user=Depends(admin)):
     if value.platform == 'youtube' and value.mode != 'official':
         raise HTTPException(422, 'YouTube uses the official Data API')
     if value.platform != 'youtube' and value.mode != 'apify':
-        raise HTTPException(422, 'Facebook, Instagram and X use Apify')
+        raise HTTPException(422, 'Facebook, Instagram, X and Reddit use Apify')
     secret = {'api_key': value.api_key}
     await db().platform_credentials.update_one({'platform': value.platform}, {'$set': dict(platform=value.platform, mode=value.mode,
         encrypted_api_key=encrypt(secret), status='pending', error=None)}, upsert=True)

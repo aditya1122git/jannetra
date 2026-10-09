@@ -61,6 +61,11 @@ if the framing favors PK, otherwise neutral. "मोदी-शाह चुप �
 Modi/Shah and may be positive toward Jan Suraaj only when campaign framing clearly
 supports it; otherwise neutral. "Jan Suraaj ने निराश किया" is negative.
 
+Goodwill and empathy expressed by a tracked target count as positive framing of that
+target. For example, a title saying that Jan Suraaj expressed grief or condolences
+after someone's death is positive toward Jan Suraaj: the death is negative news,
+but the tracked target is shown expressing sympathy.
+
 Do not infer that an allegation is true. Confidence measures target attribution certainty.
 Return exactly one result for every supplied id, in the same order."""
 

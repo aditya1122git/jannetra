@@ -12,29 +12,37 @@ from app.sentiment import Classifier, Result, apply_target_context, detect_targe
 
 
 @pytest.mark.asyncio
-async def test_exact_threshold_routes_only_below_80(monkeypatch):
+async def test_low_confidence_and_all_hf_negatives_route_to_gemini(monkeypatch):
     settings = SimpleNamespace(
         hf_confidence_threshold=.80, hf_model='hf', hf_revision='rev',
         gemini_model='gemini-test', gemini_api_key='test', gemini_concurrency=2,
     )
     engine = Classifier(settings)
     monkeypatch.setattr(engine, '_run', lambda texts: [
-        Result(sentiment='neutral', confidence=c, reason='HF') for c in [.80, .799, .9]])
+        Result(sentiment='neutral', confidence=.80, reason='HF'),
+        Result(sentiment='neutral', confidence=.799, reason='HF'),
+        Result(sentiment='negative', confidence=.95, reason='HF'),
+    ])
 
     class Fallback:
         last_error = None
 
         async def classify(self, texts):
-            assert texts == ['low']
-            return [Result(sentiment='negative', confidence=.88, reason='Target criticism')]
+            assert texts == ['low', 'hf-negative']
+            return [
+                Result(sentiment='negative', confidence=.88, reason='Target criticism'),
+                Result(sentiment='positive', confidence=.93, reason='Target expressed sympathy'),
+            ]
 
     engine._gemini = Fallback()
-    results = await engine.classify(['boundary', 'low', 'high'])
+    results = await engine.classify(['boundary', 'low', 'hf-negative'])
     assert [r.model_used for r in results] == [
-        'hf@rev', 'gemini/gemini-test', 'hf@rev',
+        'hf@rev', 'gemini/gemini-test', 'gemini/gemini-test',
     ]
     assert results[1].hf_confidence == .799
     assert results[1].sentiment == 'negative'
+    assert results[2].hf_confidence == .95
+    assert results[2].sentiment == 'positive'
 
 
 @pytest.mark.parametrize('title', [
@@ -53,7 +61,7 @@ def test_negative_event_with_campaign_hashtag_routes_to_target_verifier(title):
     assert 'Gemini verification' in result.reason
 
 
-def test_direct_target_criticism_can_stay_high_confidence_hf():
+def test_direct_target_criticism_keeps_hf_candidate_confidence_before_verification():
     result = apply_target_context(
         'Jan Suraaj ने जनता को निराश किया',
         Result(sentiment='negative', confidence=.94, reason='Overall negative'), .80,

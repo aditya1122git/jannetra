@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import random
 from collections import defaultdict
@@ -13,7 +14,7 @@ from .sentiment import classifier
 
 POST_SCOPE = {'$or': [{'platform': {'$ne': 'youtube'}}, {'demo': True}, {'content_scope': 'youtube-title-only-v2'}]}
 
-PLATFORMS = ['facebook', 'instagram', 'x', 'youtube', 'news']
+PLATFORMS = ['facebook', 'instagram', 'x', 'youtube', 'news', 'reddit']
 DEFAULT_KEYWORD_VARIANTS = ['Jan Suraj Party', 'Jan Suraaj Party', 'Jan Suraj', 'Jan Suraaj',
                             '#JanSuraj', '#JanSuraaj']
 KEYWORDS = ['Jan Suraaj Party', 'Prashant Kishore', 'PK', 'जन सुराज', 'प्रशांत किशोर', '#JanSuraaj', '#PrashantKishore']
@@ -149,17 +150,25 @@ async def notify_negative_posts(db, client):
             continue
         sentiment = post_row.get('sentiment') or {}
         confidence = round(float(sentiment.get('confidence', 0)) * 100)
-        content = ' '.join(str(post_row.get('content') or '').split())[:800]
-        message = (f'🚨 JanNetra negative post\n\n'
-                   f'Platform: {str(post_row.get("platform", "unknown")).title()}\n'
-                   f'Author: {post_row.get("author") or "Unknown"}\n'
+        platform = str(post_row.get('platform') or 'unknown')
+        platform_name = {
+            'x': 'X', 'youtube': 'YouTube', 'reddit': 'Reddit',
+            'facebook': 'Facebook', 'instagram': 'Instagram', 'news': 'News',
+        }.get(platform, platform.title())
+        content = html.escape(' '.join(str(post_row.get('content') or '').split())[:800])
+        author = html.escape(str(post_row.get('author') or 'Unknown'))
+        link_label = f'View on {platform_name}'
+        link = f'<a href="{html.escape(url, quote=True)}">{link_label}</a>'
+        message = (f'?? <b>JanNetra negative post</b>\n\n'
+                   f'Platform: {platform_name}\n'
+                   f'Author: {author}\n'
                    f'Confidence: {confidence}%\n\n'
-                   f'{content}\n\nOpen post: {url}')
+                   f'{content}\n\n{link}')
         try:
             response = await request(client, 'POST',
                 f'https://api.telegram.org/bot{c.telegram_bot_token}/sendMessage',
                 json={'chat_id': c.telegram_chat_id, 'text': message,
-                      'disable_web_page_preview': False})
+                      'parse_mode': 'HTML', 'disable_web_page_preview': True})
             if not isinstance(response, dict) or not response.get('ok'):
                 raise RuntimeError('Telegram rejected the message')
             await db.posts.update_one({'_id': post_row['_id']}, {
@@ -238,7 +247,25 @@ async def sync(db, client, platforms=None):
                             'error': str(exc) if isinstance(exc, RuntimeError) else 'Connection failed; check configuration'}})
             engine = classifier()
             try:
-                posts = await db.posts.find({**POST_SCOPE, 'platform': {'$in': enabled}, 'sentiment': None, 'demo': False}).limit(200).to_list(200)
+                # Schema v6 makes Gemini verification mandatory for every HF
+                # negative. Re-open older HF-only negatives once so existing
+                # overall-tone mistakes are corrected as well.
+                await db.posts.update_many({
+                    **POST_SCOPE,
+                    'demo': False,
+                    'sentiment.label': 'negative',
+                    'sentiment.model_used': {'$not': {'$regex': '^gemini/'}},
+                    'sentiment_schema_version': {'$ne': 6},
+                }, {
+                    '$set': {'sentiment': None, 'classification_status': 'pending_reverification'},
+                    '$unset': {'classification_error': '', 'hf_candidate': ''},
+                })
+                posts = await db.posts.find({
+                    **POST_SCOPE,
+                    'platform': {'$in': enabled},
+                    'sentiment': None,
+                    'demo': False,
+                }).sort('published_at', -1).limit(200).to_list(200)
                 size = config().hf_batch_size
                 for offset in range(0, len(posts), size):
                     batch = posts[offset:offset + size]
@@ -247,7 +274,7 @@ async def sync(db, client, platforms=None):
                         if r.pending:
                             await db.posts.update_one({'_id': p['_id'], 'sentiment': None}, {'$set': {
                                 'classification_status': 'awaiting_gemini', 'hf_candidate': r.model_dump(),
-                                'classification_error': 'Gemini unavailable; low-confidence result excluded from totals'}})
+                                'classification_error': 'Gemini unavailable; negative or low-confidence result excluded from totals'}})
                             continue
                         start, end = bounds(today())
                         published_today = start <= p['published_at'] < end
@@ -259,7 +286,7 @@ async def sync(db, client, platforms=None):
                             model_used=r.model_used or engine.provenance, hf_confidence=r.hf_confidence,
                             language=r.language, targets=r.targets,
                             review_required=r.review_required, classified_at=now()), 'classification_status': 'classified',
-                            'sentiment_schema_version': 5}
+                            'sentiment_schema_version': 6}
                         if notification:
                             update_fields['telegram_notification'] = notification
                         unset_fields = {'classification_error': '', 'hf_candidate': ''}

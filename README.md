@@ -68,10 +68,10 @@ A local `.env` is provided beside `docker-compose.yml`. It is ignored by Git and
 | `HF_LOCAL_FILES_ONLY` | Offline cache-only loading after downloading weights; default false |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | Target-aware verifier key and model; default `gemini-3.5-flash-lite` |
 | `HF_CONFIDENCE_THRESHOLD`, `GEMINI_CONCURRENCY` | Gemini gate defaults to 0.80; 2 concurrent calls |
-| `ENABLED_PLATFORMS` | Comma-separated sources: `facebook,instagram,x,youtube,news`; set `youtube` for YouTube-only operation |
+| `ENABLED_PLATFORMS` | Comma-separated sources: `facebook,instagram,x,youtube,news,reddit`; set `youtube` for YouTube-only operation |
 | `YOUTUBE_API_KEY`, `YOUTUBE_BACKUP_API_KEY` | Primary YouTube Data API v3 key and optional quota-fallback key |
 | `YOUTUBE_INITIAL_LOOKBACK_DAYS` | First-run YouTube backfill window (default 7 days) |
-| `APIFY_API_TOKEN` | Shared by the Facebook, Instagram and X connectors; News does not use Apify |
+| `APIFY_API_TOKEN` | Shared by the Facebook, Instagram, X and Reddit connectors; News does not use Apify |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Enable one Telegram message, including the source link, for each newly classified negative post |
 | `ALLOWED_ORIGINS` | Exact CORS origins for the UI |
 | `REPORTING_TIMEZONE` | `Asia/Kolkata` by default |
@@ -101,6 +101,7 @@ This uses built-in sample text only. It does not write posts, connect to social 
 | Platform | Implemented connector | Required access / coverage |
 |---|---|---|
 | X | Configured Apify Actor, normalized output, overlap deduplication and retry/backoff | Apify token, Actor access and the Actor's input schema. |
+| Reddit | `fatihtahta/reddit-scraper-search-fast`, post-only keyword search, newest-first date filtering | Apify token. Titles and post bodies are stored; comments and NSFW posts are excluded. |
 | YouTube | Official Data API v3 video search + `videos.list` snippet/statistics | Every 15 minutes inside the admin-configured active window, one combined search covers all tracked terms and includes regular videos and Shorts. `videos.list` supplies duration and engagement metadata. If the primary key reports quota exhaustion, the connector switches to `YOUTUBE_BACKUP_API_KEY` for the rest of that run. The initial strategy upgrade backfills 7 days. Only the video title is matched, stored, and classified. Descriptions and comments are excluded. |
 | Facebook | Configured Apify Actor | Actor access and a compatible output schema. |
 | Instagram | Configured Apify Actor | Actor access and a compatible output schema. |
@@ -112,7 +113,7 @@ YouTube Search API is relevance-ranked and does not promise an exhaustive list o
 
 ### Apify Actor contract
 
-`APIFY_API_TOKEN` is the only Apify environment value. JanNetra fixes the social Actors to `apify/facebook-posts-scraper`, `apify/instagram-scraper`, and `apidojo/tweet-scraper`. Because Facebook's Posts Actor requires page URLs, JanNetra first discovers relevant public pages through `apify/facebook-search-scraper`, then fetches their latest posts. News is fetched separately from Google News RSS and requires no API token. Social connectors use bearer authentication, bounded synchronous runs, keyword filtering and retry/backoff.
+`APIFY_API_TOKEN` is the only Apify environment value. JanNetra fixes the social Actors to `apify/facebook-posts-scraper`, `apify/instagram-scraper`, `apidojo/twitter-scraper-lite`, and `fatihtahta/reddit-scraper-search-fast`. Because Facebook's Posts Actor requires page URLs, JanNetra first discovers relevant public pages through `apify/facebook-search-scraper`, then fetches their latest posts. Reddit collection stores posts only and does not request comments. News is fetched separately from Google News RSS and requires no API token. Social connectors use bearer authentication, bounded synchronous runs, keyword filtering and retry/backoff.
 
 Actor IDs and JSON templates remain optional advanced overrides because Store Actors and their schemas can change independently of JanNetra. Output normalization accepts common IDs, post text/caption/title, publication timestamps, URLs, authors and engagement counts. Items without a usable timestamp or tracked term are excluded.
 

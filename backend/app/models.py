@@ -4,7 +4,7 @@ from beanie import Document
 from pydantic import BaseModel, Field
 from pymongo import IndexModel, DESCENDING, TEXT
 
-Platform = Literal['facebook', 'instagram', 'x', 'youtube', 'news']
+Platform = Literal['facebook', 'instagram', 'x', 'youtube', 'news', 'reddit']
 Label = Literal['positive', 'negative', 'neutral', 'mixed']
 
 def now():

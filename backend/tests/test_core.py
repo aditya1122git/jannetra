@@ -8,7 +8,7 @@ import pytest
 import httpx
 from cryptography.fernet import Fernet
 from mongomock_motor import AsyncMongoMockClient
-from app.config import Config
+from app.config import Config, DEFAULT_APIFY_ACTORS
 from app.models import now
 from app.services import bounds, today, create_alert, statuses, encrypt, decrypt, notify_negative_posts, within_automation_window
 from app.sentiment import Classifier
@@ -49,7 +49,38 @@ def test_token_only_apify_inputs_are_platform_specific():
     assert instagram['searchType'] == 'hashtag'
     assert instagram['search'] == 'JanSuraaj,PrashantKishore'
     assert instagram['onlyPostsNewerThan'].endswith('Z')
-    assert _actor_input('x', keywords, since, 20)['searchTerms'] == keywords
+    x_input = _actor_input('x', keywords + ['PK', '#JanSuraaj'], since, 20)
+    assert len(x_input['searchTerms']) == 1
+    assert '"Jan Suraaj" OR "Prashant Kishore"' in x_input['searchTerms'][0]
+    assert '("PK" Bihar)' in x_input['searchTerms'][0]
+    assert '#JanSuraaj' in x_input['searchTerms'][0]
+    assert f"since:{since.date().isoformat()}" in x_input['searchTerms'][0]
+    assert x_input['start'] == since.date().isoformat()
+    assert x_input['maxItems'] == 50
+    assert x_input['sort'] == 'Latest + Top'
+    assert DEFAULT_APIFY_ACTORS['x'] == 'apidojo~twitter-scraper-lite'
+
+    reddit = _actor_input('reddit', keywords + ['PK'], since, 20)
+    assert reddit['queries'] == ['"Jan Suraaj" OR "Prashant Kishore"']
+    assert reddit['sort'] == 'new'
+    assert reddit['scrapeComments'] is False
+    assert reddit['maxPosts'] == 20
+    assert reddit['dateFrom'].endswith('Z')
+    assert DEFAULT_APIFY_ACTORS['reddit'] == 'fatihtahta~reddit-scraper-search-fast'
+
+
+@pytest.mark.asyncio
+async def test_x_apify_no_results_sentinel_is_not_reported_as_live():
+    def handler(request):
+        assert request.url.path.endswith('/run-sync-get-dataset-items')
+        return httpx.Response(200, json=[{'noResults': True}])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ProviderError, match='no tweet rows'):
+            await apify_posts(
+                client, 'x', {'api_key': 'token'}, ['Jan Suraaj'],
+                now() - timedelta(hours=4),
+            )
 
 
 @pytest.mark.parametrize('source', [
@@ -101,7 +132,49 @@ async def test_negative_post_telegram_alert_is_idempotent(monkeypatch):
     assert len(requests) == 1
     payload = json.loads(requests[0].content)
     assert payload['chat_id'] == '-1001234567890'
-    assert 'https://example.org/post/negative-1' in payload['text']
+    assert '<a href="https://example.org/post/negative-1">View on Facebook</a>' in payload['text']
+    assert payload['parse_mode'] == 'HTML'
+    assert payload['disable_web_page_preview'] is True
+
+
+@pytest.mark.asyncio
+async def test_reddit_apify_maps_post_body_and_skips_comments():
+    captured = []
+
+    def handler(request):
+        captured.append(request)
+        return httpx.Response(200, json=[
+            {
+                'kind': 'post', 'id': 'reddit-post-1',
+                'title': 'Jan Suraaj discussion',
+                'body': 'A long Prashant Kishore post body.',
+                'author': 'bihar_analyst', 'score': 42, 'num_comments': 7,
+                'created_utc': now().isoformat(),
+                'canonical_url': 'https://www.reddit.com/r/bihar/comments/reddit-post-1/topic/',
+            },
+            {
+                'kind': 'comment', 'id': 'reddit-comment-1',
+                'body': 'Prashant Kishore comment', 'author': 'commenter',
+                'created_utc': now().isoformat(),
+                'url': 'https://www.reddit.com/r/bihar/comments/reddit-post-1/topic/comment/',
+            },
+        ])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await apify_posts(
+            client, 'reddit', {'api_key': 'token'},
+            ['Jan Suraaj', 'Prashant Kishore'], now() - timedelta(hours=4),
+        )
+
+    assert len(rows) == 1
+    assert rows[0]['platform'] == 'reddit'
+    assert rows[0]['content'] == 'Jan Suraaj discussion\n\nA long Prashant Kishore post body.'
+    assert rows[0]['author'] == 'bihar_analyst'
+    assert rows[0]['engagement']['likes'] == 42
+    assert rows[0]['engagement']['comments'] == 7
+    assert rows[0]['content_scope'] == 'reddit-post-only-v1'
+    payload = json.loads(captured[0].content)
+    assert payload['scrapeComments'] is False
 
 
 @pytest.mark.asyncio

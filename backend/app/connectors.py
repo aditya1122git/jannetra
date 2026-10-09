@@ -341,26 +341,83 @@ def _actor_input(platform, keywords, since, max_items):
             'onlyPostsNewerThan': since_iso,
         }
     if platform == 'x':
-        return {'searchTerms': keywords, 'maxItems': max_items, 'sort': 'Latest'}
+        # Use one OR query so every entity spelling shares the full result
+        # budget. The Actor supports only a small batch of searches, while the
+        # tracked-keyword list can be much larger and starve later entries.
+        terms = []
+        for keyword in keywords:
+            cleaned = str(keyword).strip()
+            if not cleaned:
+                continue
+            if cleaned.casefold() == 'pk':
+                expression = '("PK" Bihar)'
+            elif cleaned.startswith('#'):
+                expression = cleaned
+            else:
+                expression = f'"{cleaned.replace(chr(34), "").strip()}"'
+            if expression.casefold() not in {term.casefold() for term in terms}:
+                terms.append(expression)
+        if not terms:
+            raise ProviderError('No usable X search terms')
+        start_date = since.astimezone(timezone.utc).date().isoformat()
+        query = f'({" OR ".join(terms)}) since:{start_date} -filter:replies'
+        return {
+            'searchTerms': [query],
+            'maxItems': max(50, max_items),
+            'sort': 'Latest + Top',
+            'start': start_date,
+            'includeSearchTerms': True,
+        }
+    if platform == 'reddit':
+        terms = []
+        for keyword in keywords:
+            cleaned = str(keyword).strip()
+            if not cleaned or cleaned.casefold() == 'pk':
+                continue
+            expression = cleaned if cleaned.startswith('#') else f'"{cleaned.replace(chr(34), "").strip()}"'
+            if expression.casefold() not in {term.casefold() for term in terms}:
+                terms.append(expression)
+        if not terms:
+            raise ProviderError('No usable Reddit search terms')
+        return {
+            'queries': [' OR '.join(terms)],
+            'sort': 'new',
+            'timeframe': 'day',
+            'dateFrom': since.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            'forceSortNewForTimeFilteredRuns': True,
+            'scrapeComments': False,
+            'includeNsfw': False,
+            'strictSearch': False,
+            'strictTokenFilter': False,
+            'sentiment_analysis': False,
+            'content_analysis': False,
+            'maxPosts': max_items,
+        }
     raise ProviderError(f'Unsupported direct Apify input for {platform}')
 
 
 def _apify_item(platform, item, keywords, since):
     if not isinstance(item, dict):
         return None
+    if platform == 'reddit':
+        kind = str(_first(item, 'kind', 'type', default='post')).lower()
+        if kind not in ('post', 'submission'):
+            return None
     title = str(_first(item, 'title', 'headline', 'article.title', default='')).strip()
-    text = str(_first(item, 'text', 'full_text', 'tweetText', 'postText', 'message', 'caption',
+    text = str(_first(item, 'body', 'selftext', 'text', 'full_text', 'tweetText', 'postText', 'message', 'caption',
                       'description', 'snippet', 'article.description', default='')).strip()
     # Social Actors expose the post body in `text`/`caption`; replies and
     # comments are intentionally excluded.
-    content = text or title
+    content = '\n\n'.join(part for part in (title, text) if part) if platform == 'reddit' else text or title
     if not content or not matches(content, keywords):
         return None
-    published = _timestamp(_first(item, 'publishedAt', 'published_at', 'createdAt', 'created_at', 'takenAt',
+    published = _timestamp(_first(item, 'publishedAt', 'published_at', 'createdAt', 'created_at', 'created_utc', 'takenAt',
                                   'date_utc', 'timestamp', 'date', 'time', 'timeCreated', 'article.publishedAt'))
     if published < since:
         return None
-    url = str(_first(item, 'url', 'postUrl', 'tweetUrl', 'permalink', 'link', 'article.url', default=''))
+    url = str(_first(item, 'canonical_url', 'url', 'postUrl', 'tweetUrl', 'permalink', 'link', 'article.url', default=''))
+    if platform == 'reddit' and url.startswith('/'):
+        url = 'https://www.reddit.com' + url
     external_id = _first(item, 'id', 'postId', 'tweetId', 'shortCode', 'shortcode', 'article.id')
     if not external_id:
         external_id = hashlib.sha256(f'{platform}\0{url}\0{content}\0{published.isoformat()}'.encode()).hexdigest()
@@ -368,13 +425,15 @@ def _apify_item(platform, item, keywords, since):
                                 'author', 'ownerUsername', 'username', 'fullName', 'user.pageName', 'user.name', 'user',
                                 'channelName', 'source', 'publisher', default='Unknown'))
     engagement = dict(
-        likes=_number(item, 'likesCount', 'likeCount', 'reactionCount', 'likes', 'favoriteCount', 'stats.likes', 'reactions_count', 'public_metrics.like_count'),
-        comments=_number(item, 'commentsCount', 'commentCount', 'comments', 'replyCount', 'stats.comments', 'comments_count', 'public_metrics.reply_count'),
+        likes=_number(item, 'likesCount', 'likeCount', 'reactionCount', 'likes', 'favoriteCount', 'score', 'ups', 'stats.likes', 'reactions_count', 'public_metrics.like_count'),
+        comments=_number(item, 'commentsCount', 'commentCount', 'comments', 'replyCount', 'num_comments', 'stats.comments', 'comments_count', 'public_metrics.reply_count'),
         shares=_number(item, 'sharesCount', 'shareCount', 'shares', 'retweetCount', 'stats.shares', 'reshare_count', 'public_metrics.retweet_count'),
         views=_number(item, 'viewsCount', 'viewCount', 'videoPostViewCount', 'views', 'impressionCount', 'public_metrics.impression_count'),
     )
     row = post(platform, external_id, author, content, url, published.isoformat(), engagement)
-    row.update(source_provider='apify', content_scope='apify-public-post-v1')
+    row.update(source_provider='apify', content_scope=(
+        'reddit-post-only-v1' if platform == 'reddit' else 'apify-public-post-v1'
+    ))
     return row
 
 
@@ -424,6 +483,11 @@ async def apify_posts(client, platform, secret, keywords, since):
     data = await _run_apify_actor(
         client, DEFAULT_APIFY_ACTORS[platform], api_key, payload, max_items,
     )
+    if platform == 'x' and data and all(
+            isinstance(item, dict) and item.get('noResults') for item in data):
+        raise ProviderError(
+            'Apify X Actor returned no tweet rows; the search provider did not supply results'
+        )
     rows = []
     invalid = 0
     for item in data:
